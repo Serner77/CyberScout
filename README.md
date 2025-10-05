@@ -121,6 +121,7 @@ SYN scan (más sigiloso y rápido, requiere root):
 ### Salida de ejemplo
 
 [i] Empezando escaneo de 192.168.1.10
+
 [i] Obteniendo ttl y sistema operativo
 
 192.168.1.10 (ttl -> 128): Windows (estimado)
