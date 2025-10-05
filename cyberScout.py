@@ -4,101 +4,188 @@
 CyberScout: Scanner orientativo de IPs
 - Detecta OS usando TTL
 - Escanea puertos comunes
-- Obtiene versión de servicios (heurística)
-- Indica posibles vulnerabilidades conocidas (orientativo)
+- Obtiene versión de servicios
 """
 
+import re
+import sys
+import subprocess
+import socket
+import os
 
-import re, sys, subprocess, socket, platform
-
+USAGE = f"\n[!] Uso: python3 {sys.argv[0]} <direccion-ip>\n"
 
 if len(sys.argv) != 2:
-    print("\n[!] Uso: python3 " + sys.argv[0] + " <direccion-ip>\n")
+    print(USAGE)
     sys.exit(1)
 
-def get_ttl(ip):
 
-    proc = subprocess.Popen(["/usr/bin/ping -c 1 %s" % ip_address, ""], stdout=subprocess.PIPE, shell=True)
-    (out,err) = proc.communicate()
+def run(cmd, timeout=60):
+    """Ejecuta comando y retorna (returncode, stdout, stderr)"""
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return p.returncode, p.stdout, p.stderr
 
-    out = out.split()
-    out = out[12].decode('utf-8')
 
-    ttl_value = re.findall(r"\d{1,3}", out)[0]
+def get_ttl(ip: str) -> int:
+    # ping portable; no asumas /usr/bin/ping
+    rc, out, err = run(["ping", "-c", "1", "-W", "1", ip], timeout=5)
+    if rc != 0:
+        raise RuntimeError(f"ping a {ip} falló: {err.strip() or out.strip()}")
+    # busca ttl=XX
+    m = re.search(r"ttl=(\d+)", out, re.IGNORECASE)
+    if not m:
+        raise RuntimeError(f"No pude extraer TTL del ping: {out}")
+    return int(m.group(1))
 
-    return ttl_value
 
-def get_os(ttl):
+def get_os(ttl: int) -> str:
+    if 0 <= ttl <= 64:
+        return "Linux/Unix (estimado)"
+    elif 65 <= ttl <= 128:
+        return "Windows (estimado)"
+    elif 129 <= ttl <= 255:
+        return "Network device/BSD (estimado)"
+    return "Desconocido"
 
-    ttl = int(ttl)
 
-    if ttl >= 0 and ttl <= 64:
-        return "Linux"
-    elif ttl >= 65 and ttl <= 128:
-        return "Windows"
-    else:
-        return "Not Found"
+def scan_ports(ip: str) -> list[int]:
+    # Usa SYN si eres root, si no, TCP connect
+    scan_flag = "-sS" if os.geteuid() == 0 else "-sT"
+    cmd = ["nmap", "-p-", "--open", scan_flag, "--min-rate", "5000",
+           "-vvv", "-n", "-Pn", ip]
+    rc, out, err = run(cmd, timeout=600)
+    if rc != 0:
+        raise RuntimeError(f"nmap escaneo puertos falló: {err.strip()}")
+    open_ports: list[int] = []
+    for line in out.splitlines():
+        # Ej.: "PORT     STATE SERVICE" / "80/tcp open  http"
+        m = re.search(r"(\d+)/tcp\s+open", line)
+        if m:
+            open_ports.append(int(m.group(1)))
+    return sorted(set(open_ports))
 
-def scan_ports(ip):
 
-    cmd = f"nmap -p- --open -sS --min-rate 5000 -vvv -n -Pn {ip}"
-    try:
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-        output = proc.stdout
-    except Exception as e:
-        print("Error ejecutando nmap:", e)
+def get_service_versions(ip: str, ports: list[int], output_file="targeted") -> list[dict]:
+    if not ports:
         return []
+    port_str = ",".join(str(p) for p in sorted(set(ports)))
 
-    open_ports = []
-    # Buscar líneas que contienen "port/tcp open"
-    for line in output.splitlines():
-        match = re.search(r"(\d+)/tcp\s+open", line)
-        if match:
-            open_ports.append(int(match.group(1)))
+    cmd = [
+        "nmap", f"-p{port_str}", "-sV", "--version-intensity", "9",
+        "-sC", "--script", "http-title,http-server-header,http-headers,ssl-cert",
+        "-Pn", "-n", ip, "-oN", output_file
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    out = proc.stdout + "\n" + proc.stderr
+    if proc.returncode != 0 and not out:
+        raise RuntimeError(f"nmap falló: {proc.stderr}")
 
-    ports_str = ",".join(str(p) for p in sorted(open_ports))
+    results = {}  # port -> dict
+    current_port = None
 
-    return ports_str
+    for raw in out.splitlines():
+        line = raw.rstrip()
 
-def get_service_versions(ip, ports, output_file="targeted"):
+        # 1) Cabecera principal por puerto
+        m = re.match(r"(\d+)/tcp\s+open\s+(\S+)\s*(.*)", line)
+        if m:
+            current_port = int(m.group(1))
+            service = m.group(2)
+            version = (m.group(3) or "").strip()
+            results[current_port] = {
+                "port": current_port,
+                "service": service,
+                "version": version,
+                "http_title": None,
+                "server_header": None,
+                "tls_subject": None,
+                "tls_valid_after": None,
+                "tls_valid_before": None
+            }
+            continue
 
-    # Convertir lista de puertos a string "22,80,443"
-    port_str = ",".join(str(p) for p in ports)
+        if current_port is None:
+            continue  # aún no hemos entrado en un bloque de puerto
 
-    cmd = f"nmap -p{port_str} -sCV {ip} -oN {output_file}"
-    try:
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-        output = proc.stdout
-    except Exception as e:
-        print("Error ejecutando nmap:", e)
-        return []
+        # 2) Scripts/lines anidadas bajo el puerto actual
+        # http-title
+        m = re.search(r"http-title:\s*(.+)$", line)
+        if m:
+            results[current_port]["http_title"] = m.group(1).strip()
+            continue
+        # http-server-header
+        m = re.search(r"http-server-header:\s*(.+)$", line)
+        if m:
+            hdr = m.group(1).strip()
+            if hdr and hdr != "<empty>":
+                results[current_port]["server_header"] = hdr
+            continue
+        # ssl-cert Subject
+        m = re.search(r"ssl-cert:\s+Subject:\s+(.+)$", line)
+        if m:
+            results[current_port]["tls_subject"] = m.group(1).strip()
+            continue
+        # ssl-cert Not valid before/after
+        m = re.search(r"Not valid before:\s+([0-9T:\-]+)", line)
+        if m:
+            results[current_port]["tls_valid_after"] = m.group(1)
+            continue
+        m = re.search(r"Not valid after:\s+([0-9T:\-]+)", line)
+        if m:
+            results[current_port]["tls_valid_before"] = m.group(1)
+            continue
 
-    # Analizar la salida para extraer puerto, servicio y versión
-    results = []
-    # Buscamos líneas tipo: "22/tcp open  ssh     OpenSSH 7.2p2 Debian ..."
-    for line in output.splitlines():
-        line = line.strip()
-        match = re.match(r"(\d+)/tcp\s+open\s+(\S+)\s*(.*)", line)
-        if match:
-            port = int(match.group(1))
-            service = match.group(2)
-            version = match.group(3).strip() if match.group(3) else ""
-            results.append({"port": port, "service": service, "version": version})
+    # 3) Completa "version" si estaba vacía con pistas útiles
+    enriched = []
+    for p, info in sorted(results.items()):
+        v = info["version"]
+        if not v:
+            # intenta usar server_header o título
+            if info["server_header"]:
+                v = info["server_header"]
+            elif info["http_title"] and info["service"].startswith("http"):
+                v = f"title: {info['http_title']}"
+            elif info["tls_subject"]:
+                v = f"TLS {info['tls_subject']}"
+                if info["tls_valid_after"] and info["tls_valid_before"]:
+                    v += f" (valid {info['tls_valid_after']}..{info['tls_valid_before']})"
+            else:
+                v = ""  # sin señal
+        info["version"] = v
+        enriched.append(info)
 
-    return results
+    return enriched
 
-if __name__ == '__main__':
 
+if __name__ == "__main__":
     ip_address = sys.argv[1]
+    print(f"[i] Empezando escaneo de {ip_address}")
 
-    ttl = get_ttl(ip_address)
-    os_name = get_os(ttl)
+    try:
+        print("[i] Obteniendo ttl y sistema operativo")
+        ttl = get_ttl(ip_address)
+        os_name = get_os(ttl)
+    except Exception as e:
+        ttl, os_name = -1, f"No TTL ({e})"
 
-    open_ports = scan_ports(ip_address)
+    print(f"\n{ip_address} (ttl -> {ttl}): {os_name}\n")
 
-    #service_versions = get_service_versions(ip_address, open_ports)
-    print("\n%s (ttl -> %s): %s\n" % (ip_address, ttl, os_name))
-    print("Puertos abiertos: %s" % (open_ports))
-    #for s in service_versions:
-        #print(f"Puerto {s['port']}/tcp: {s['service']} - {s['version']}")
+    try:
+        print("[i] Descubriendo puertos abiertos")
+        open_ports = scan_ports(ip_address)
+    except Exception as e:
+        print(f"[x] Error escaneando puertos: {e}")
+        sys.exit(1)
+
+    print("\nPuertos abiertos:", ",".join(map(str, open_ports)) or "ninguno")
+
+    try:
+        print(f"\n[i] Obteniendo versiones de los puertos {open_ports}\n")
+        service_versions = get_service_versions(ip_address, open_ports)
+    except Exception as e:
+        print(f"[x] Error obteniendo versiones: {e}")
+        service_versions = []
+
+    for s in service_versions:
+        print(f"Puerto {s['port']}/tcp: {s['service']} - {s['version']}")
 
