@@ -2,7 +2,6 @@
 
 Escáner orientativo de IPs para Linux. **CyberScout** realiza detección de sistema operativo por TTL, descubre puertos abiertos con Nmap y enumera versiones y metadatos de servicios de forma rápida y reproducible.
 
----
 
 ## Índice
 
@@ -18,7 +17,6 @@ Escáner orientativo de IPs para Linux. **CyberScout** realiza detección de sis
 - [Compatibilidad](#compatibilidad)
 - [Buenas prácticas y ética](#buenas-prácticas-y-ética)
 - [Solución de problemas](#solución-de-problemas)
-- [Contribuir](#contribuir)
 - [Autor](#autor)
 
 ---
@@ -36,7 +34,6 @@ Escáner orientativo de IPs para Linux. **CyberScout** realiza detección de sis
 - **Mensajes de progreso claros**, manejo de excepciones y salida legible para terminal.
 - **Dependencias mínimas**: Python 3 y Nmap.
 
----
 
 ## Arquitectura y Flujo
 
@@ -59,7 +56,6 @@ Escáner orientativo de IPs para Linux. **CyberScout** realiza detección de sis
 4. **Enriquecimiento**  
    Si no hay versión explícita, se sustituyen pistas útiles (Server, título HTTP, sujeto TLS con ventana de validez).
 
----
 
 ## Requisitos
 
@@ -75,7 +71,6 @@ Instalación de Nmap (Debian/Ubuntu):
 
     sudo apt update && sudo apt install -y nmap
 
----
 
 ## Instalación
 
@@ -96,7 +91,6 @@ Invoca `cyberscout` desde cualquier ruta.
     sudo cp /ruta/al/repo/cyberscout.py /usr/local/bin/cyberscout
     sudo chmod +x /usr/local/bin/cyberscout
 
----
 
 ## Uso
 
@@ -140,7 +134,6 @@ Puertos abiertos: 22,80,443
 
 > Nmap genera además un archivo **`targeted`** con el detalle del escaneo de servicios.
 
----
 
 ## Rendimiento
 
@@ -151,7 +144,6 @@ Puertos abiertos: 22,80,443
   - Considera `--script-timeout 15s` si el objetivo abre muchos puertos o hay servicios lentos.
   - Ajusta `--min-rate` si la red es sensible (p. ej., `--min-rate 1000`).
 
----
 
 ## Compatibilidad
 
@@ -159,13 +151,11 @@ Puertos abiertos: 22,80,443
 - Requiere `nmap` y `ping` accesibles en el `PATH`.
 - Orientado a **IPv4** (IPv6 no contemplado en esta versión).
 
----
 
 ## Buenas prácticas y ética
 
 Uso exclusivo para **auditorías autorizadas** o entornos propios con consentimiento. El uso no autorizado puede ser **ilegal**. Asegúrate de cumplir la normativa aplicable.
 
----
 
 ## Solución de problemas
 
@@ -174,19 +164,8 @@ Uso exclusivo para **auditorías autorizadas** o entornos propios con consentimi
 - **“Permisos requeridos para SYN scan”** → ejecuta con `sudo` o utiliza el *fallback* `-sT`.
 - **HTTPS sin banner** → intenta sin `-Pn` o incrementa `--version-intensity`.
 
----
-
-## Contribuir
-
-1. Abre un *issue* con el cambio propuesto.  
-2. Haz *fork* y crea una rama (`feature/json-output`, `fix/ttl-parse`).  
-3. Incluye *tests* o casos de salida cuando aplique.  
-4. Abre un *Pull Request* con descripción clara de impacto y riesgos.
-
----
 
 ## Autor
 
 Desarrollado por Serner77.
 
----
